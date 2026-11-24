@@ -1,0 +1,6 @@
+node_modules
+dist
+.shots
+.DS_Store
+# third-party design skills copied locally for tooling; not part of the site
+.claude/skills/
