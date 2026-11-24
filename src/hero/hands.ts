@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { buildSkeleton, FINGERS, type Pose, type Seg, type Skeleton } from './anatomy'
+import { buildSkeleton, FINGERS, PALM_AXIS, type Pose, type Seg, type Skeleton } from './anatomy'
 import { handSDF, surfaceNets, skin, nails, segmentSkin } from './human'
 
 export { mixPose, type Pose } from './anatomy'
@@ -68,12 +68,26 @@ export async function buildHand(kind: Kind): Promise<Hand> {
 
 function forearmHuman(mat: THREE.Material) {
   const pts: THREE.Vector2[] = []
-  for (let i = 0; i <= 20; i++) {
-    const t = i / 20
-    pts.push(new THREE.Vector2(Math.min(0.33, 0.232 + 0.0333 * t * 9), -1.75 - t * 9)) // same taper as the sculpt, so no step
+  // Continues the sculpted forearm with the same taper. It starts 4 mm inside the sculpt
+  // and rises 2 mm proud of it by y = -1.9, where the sculpt ends, so the two surfaces
+  // cross at a shallow angle and leave no ring.
+  for (let i = 0; i <= 60; i++) {
+    const y = -1.7 - (i / 60) ** 1.6 * 9
+    const dy = -1.7 - y
+    const ramp = Math.min(1, dy / 0.2)
+    const margin = -0.004 + 0.006 * ramp * ramp * (3 - 2 * ramp)
+    const r = Math.min(0.36, 0.218 + 0.03 * (-0.9 - y) + margin)
+    pts.push(new THREE.Vector2(r, y))
   }
-  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 48), mat)
+  // a lathe faces outward only when its profile runs bottom to top
+  const geo = new THREE.LatheGeometry(pts.reverse(), 64)
+  // the skin shader reads joint data; neutral values keep the tube shaded exactly like the skin
+  const n = geo.attributes.position.count
+  geo.setAttribute('aSeg', new THREE.BufferAttribute(new Float32Array(n).fill(1), 1))
+  geo.setAttribute('aRest', new THREE.BufferAttribute(new Float32Array(n * 3).fill(-9), 3))
+  const m = new THREE.Mesh(geo, mat)
   m.scale.z = 0.6
+  m.position.x = PALM_AXIS
   return m
 }
 

@@ -26,7 +26,8 @@ function roundCone(a: THREE.Vector3, b: THREE.Vector3, ra: number, rb: number, s
     const qx = px - abx * t
     const qy = py - aby * t
     const qz = (pz - abz * t) / squashZ
-    return Math.sqrt(qx * qx + qy * qy + qz * qz) * Math.min(1, squashZ) - (ra + (rb - ra) * t)
+    // ellipse section: x radius r, z radius r * squashZ (distance scaled back to stay a bound)
+    return (Math.sqrt(qx * qx + qy * qy + qz * qz) - (ra + (rb - ra) * t)) * Math.min(1, squashZ)
   }
 }
 
@@ -67,12 +68,12 @@ export function handSDF(sk: Skeleton): SDF {
     const m = sk.byDigit[f][0]
     return ellipsoid(m.b.clone().add(V(0, -0.02, -0.05)), V(m.rb * 0.95, 0.09, 0.08))
   })
-  const thenar = ellipsoid(V(0.19, -0.24, 0.08), V(0.18, 0.26, 0.13))
-  const hypo = ellipsoid(V(-0.26, -0.14, 0.05), V(0.11, 0.3, 0.1))
+  // heel pads mirrored about the palm axis so the hand reads symmetric
+  const thenar = ellipsoid(V(PALM_AXIS + 0.2, -0.22, 0.07), V(0.16, 0.27, 0.12))
+  const hypo = ellipsoid(V(PALM_AXIS - 0.2, -0.22, 0.07), V(0.16, 0.27, 0.12))
   const heel = ellipsoid(V(PALM_AXIS, -0.38, 0.045), V(0.2, 0.1, 0.08))
-  const wrist = roundCone(V(0, -0.48), V(0, -0.9), 0.215, 0.205, 0.62)
-  const forearm = roundCone(V(0, -0.9), V(0, -2.4), 0.205, 0.255, 0.6)
-  const ulna = ellipsoid(V(-0.19, -0.66, -0.045), V(0.045, 0.055, 0.04))
+  const wrist = roundCone(V(PALM_AXIS, -0.48), V(PALM_AXIS, -0.9), 0.232, 0.218, 0.6)
+  const forearm = roundCone(V(PALM_AXIS, -0.9), V(PALM_AXIS, -1.9), 0.218, 0.248, 0.6)
   const palmPad = ellipsoid(V(PALM_AXIS, 0.28, 0.05), V(0.36, 0.11, 0.06))
 
   const palm: SDF = (x, y, z) => {
@@ -83,9 +84,9 @@ export function handSDF(sk: Skeleton): SDF {
     d = smin(d, hypo(x, y, z), 0.1)
     d = smin(d, heel(x, y, z), 0.1)
     d = smin(d, palmPad(x, y, z), 0.08)
-    d = smin(d, wrist(x, y, z), 0.1)
-    d = smin(d, forearm(x, y, z), 0.2)
-    d = smin(d, ulna(x, y, z), 0.04)
+    // wrist and forearm are one limb: joined exactly (a smooth blend would inflate the joint),
+    // and only the limb as a whole blends into the palm
+    d = smin(d, Math.min(wrist(x, y, z), forearm(x, y, z)), 0.08)
     return d
   }
 
@@ -93,7 +94,7 @@ export function handSDF(sk: Skeleton): SDF {
     const parts: SDF[] = []
     for (const s of segs) {
       if (s.role === 'meta' && !thumb) continue
-      parts.push(roundCone(s.a, s.b, s.ra, s.rb, thumb ? 0.88 : 0.86))
+      parts.push(roundCone(s.a, s.b, s.ra * 1.04, s.rb * 1.04, thumb ? 0.92 : 0.9))
       // palmar pad on each phalanx, fuller toward the tip
       const mid = s.a.clone().lerp(s.b, 0.55)
       const toPad = thumb ? sk.thumbPad : V(0, 0, 1)
@@ -120,12 +121,16 @@ export function handSDF(sk: Skeleton): SDF {
   const thumb = digit(sk.byDigit.thumb, true)
   // web between thumb and index
   const tm = sk.byDigit.thumb[1]
-  const web = roundCone(tm.a.clone().lerp(tm.b, 0.2).add(V(0, 0, -0.02)), sk.byDigit.index[1].a.clone().add(V(0.02, -0.08, 0.0)), 0.05, 0.05, 0.7)
+  // web between thumb and index: a full, rounded sheet, thick enough that the mesh never
+  // resolves it as a hole and it stretches rather than tears when the thumb moves
+  const web = roundCone(tm.a.clone().lerp(tm.b, 0.35).add(V(-0.02, 0, 0.0)), sk.byDigit.index[1].a.clone().add(V(-0.02, -0.1, 0.0)), 0.085, 0.07, 0.8)
+  const web2 = ellipsoid(tm.a.clone().lerp(sk.byDigit.index[1].a, 0.45).add(V(0, -0.05, 0)), V(0.12, 0.14, 0.075))
 
   return (x, y, z) => {
     const p = palm(x, y, z)
     let d = smin(p, thumb(x, y, z), 0.12)
-    d = smin(d, web(x, y, z), 0.09)
+    d = smin(d, web(x, y, z), 0.12)
+    d = smin(d, web2(x, y, z), 0.1)
     for (const f of fingers) d = Math.min(d, smin(p, f(x, y, z), 0.06))
     return d
   }
@@ -302,9 +307,17 @@ export function skin(g: THREE.BufferGeometry, sk: Skeleton) {
       best.role === 'prox' || best.role === 'mid' ? Math.min(bt, 1 - bt) * len
       : best.role === 'dist' ? bt * len
       : 1
-    const w: [Seg, number][] = [[best, 1]]
+    const w: [Seg, number][] = []
     const blend = 0.28
-    if (bt < blend && best.parent) w.push([best.parent, 0.5 * (1 - bt / blend) ** 1.5])
+    if (best.role === 'meta' && best.parent) {
+      // metacarpals sit inside the palm: their skin hands over to the wrist gradually,
+      // so moving the thumb stretches the palm instead of tearing it off the wrist
+      const own = 0.1 + 0.9 * bt * bt
+      w.push([best, own], [best.parent, 1 - own])
+    } else {
+      w.push([best, 1])
+      if (bt < blend && best.parent) w.push([best.parent, 0.5 * (1 - bt / blend) ** 1.5])
+    }
     if (bt > 1 - blend && best.child) w.push([best.child, 0.5 * ((bt - (1 - blend)) / blend) ** 1.5])
     const sum = w.reduce((a, [, x]) => a + x, 0)
     w.forEach(([s, x], k) => {
@@ -355,10 +368,10 @@ export function segmentSkin(mat: THREE.MeshPhysicalMaterial) {
         float palmSide = smoothstep(-0.02, 0.06, vRest.z);
         float c1 = 1.0 - smoothstep(0.0025, 0.007, abs(vSeg - 0.004));
         float c2 = 1.0 - smoothstep(0.002, 0.005, abs(vSeg - 0.02));
-        float crease = max(c1, c2 * mix(0.35, 0.8, palmSide));
+        float crease = max(c1, c2 * mix(0.25, 0.6, palmSide));
         // palm lines: heart, head, life
         vec2 q = vRest.xy;
-        float onPalm = smoothstep(0.08, 0.13, vRest.z) * step(vRest.y, 0.42) * step(-0.5, vRest.y);
+        float onPalm = smoothstep(0.08, 0.13, vRest.z) * step(vRest.y, 0.42) * step(-0.5, vRest.y) * step(0.9, vSeg) * step(vRest.x, 0.16);
         float heart = min(lineTo(q, vec2(-0.4, 0.27), vec2(-0.05, 0.3)), lineTo(q, vec2(-0.05, 0.3), vec2(0.18, 0.36)));
         float head = min(lineTo(q, vec2(0.3, 0.14), vec2(0.0, 0.1)), lineTo(q, vec2(0.0, 0.1), vec2(-0.32, 0.0)));
         float life = abs(length(q - vec2(0.36, -0.28)) - 0.36) + step(q.y, -0.5) + step(0.15, q.y) + step(q.x, 0.02);

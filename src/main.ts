@@ -206,7 +206,9 @@ if (motion) {
         gsap.to(loader, { clipPath: 'inset(0 0 100% 0)', duration: 0.9, ease: 'expo.inOut', onComplete: () => loader.remove() })
         const word = heroEl.querySelector<HTMLElement>('.hero__word')!
         gsap.from(word, { yPercent: 40, opacity: 0, duration: 1.4, ease: 'expo.out', delay: 0.35, onComplete: () => glitch(word) })
-        gsap.from('.hero__sub, .hero__hud, .nav', { opacity: 0, y: 16, duration: 1.2, ease: 'expo.out', delay: 0.6, stagger: 0.08 })
+        gsap.from('.hero__sub, .hero__hud', { opacity: 0, y: 16, duration: 1.2, ease: 'expo.out', delay: 0.6, stagger: 0.08 })
+        // opacity only: a transform tween would make GSAP clear the CSS translate that centres the nav
+        gsap.from('.nav', { opacity: 0, duration: 1, ease: 'expo.out', delay: 0.6 })
         lenis?.start()
         ScrollTrigger.refresh()
       },
